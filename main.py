@@ -1,0 +1,332 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import math
+import random
+import time
+
+class MirrorCloneFX:
+    def __init__(self):
+        # Initialize MediaPipe
+        self.mp_hands = mp.solutions.hands
+        self.hands = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        self.mp_draw = mp.solutions.drawing_utils
+        
+        # Visual modes
+        self.modes = {
+            0: "Dots",
+            1: "Lines", 
+            2: "ASCII",
+            3: "Particles"
+        }
+        self.current_mode = 0
+        
+        # Particles system
+        self.particles = []
+        self.max_particles = 200
+        
+        # ASCII characters for ASCII mode (from dense to sparse)
+        self.ascii_chars = "█▉▊▋▌▍▎▏ "
+        
+        # Window dimensions
+        self.window_width = 1280
+        self.window_height = 720
+        self.half_width = self.window_width // 2
+        
+    def detect_hand_gesture(self, landmarks):
+        """Detect hand gestures from landmarks"""
+        if not landmarks:
+            return None
+            
+        # Get landmark positions
+        thumb_tip = landmarks[4]
+        thumb_ip = landmarks[3]
+        index_tip = landmarks[8]
+        index_pip = landmarks[6]
+        middle_tip = landmarks[12]
+        middle_pip = landmarks[10]
+        ring_tip = landmarks[16]
+        ring_pip = landmarks[14]
+        pinky_tip = landmarks[20]
+        pinky_pip = landmarks[18]
+        
+        # Check if fingers are extended
+        fingers_up = []
+        
+        # Thumb (different logic - compare x coordinates)
+        if thumb_tip.x > thumb_ip.x:
+            fingers_up.append(1)
+        else:
+            fingers_up.append(0)
+            
+        # Other fingers (compare y coordinates)
+        finger_tips = [index_tip, middle_tip, ring_tip, pinky_tip]
+        finger_pips = [index_pip, middle_pip, ring_pip, pinky_pip]
+        
+        for tip, pip in zip(finger_tips, finger_pips):
+            if tip.y < pip.y:
+                fingers_up.append(1)
+            else:
+                fingers_up.append(0)
+        
+        # Gesture recognition
+        # One finger (index) - Lines mode
+        if fingers_up == [0, 1, 0, 0, 0]:
+            return 1
+        
+        # Two fingers (index + middle) - Dots mode  
+        elif fingers_up == [0, 1, 1, 0, 0]:
+            return 0
+            
+        # Thumb + pinky - ASCII mode
+        elif fingers_up == [1, 0, 0, 0, 1]:
+            return 2
+            
+        # Open palm (all fingers) - Particles mode
+        elif sum(fingers_up) >= 4:
+            return 3
+            
+        return None
+    
+    def create_dots_effect(self, frame):
+        """Create stippled dot rendering"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        result = np.zeros_like(frame)
+        
+        height, width = gray.shape
+        dot_spacing = 12  # Increased spacing for cleaner look
+        
+        for y in range(0, height, dot_spacing):
+            for x in range(0, width, dot_spacing):
+                if y < height and x < width:
+                    intensity = gray[y, x]
+                    if intensity > 60:  # Adjusted threshold
+                        # Variable dot size based on intensity
+                        radius = int((intensity / 255) * 6) + 1
+                        # Use original color but make it more vibrant
+                        color = frame[y, x].astype(int)
+                        # Enhance colors slightly
+                        color = np.clip(color * 1.2, 0, 255).astype(int)
+                        cv2.circle(result, (x, y), radius, color.tolist(), -1)
+        
+        return result
+    
+    def create_lines_effect(self, frame):
+        """Create edge outline rendering"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Edge detection with better parameters
+        edges = cv2.Canny(blurred, 30, 80)
+        
+        # Create colored edge image with original colors
+        result = np.zeros_like(frame)
+        
+        # Use original frame colors for edges
+        edge_points = np.where(edges > 0)
+        for y, x in zip(edge_points[0], edge_points[1]):
+            # Get original color and make it brighter
+            original_color = frame[y, x].astype(int)
+            enhanced_color = np.clip(original_color * 1.5, 0, 255).astype(int)
+            result[y, x] = enhanced_color
+        
+        # Add some glow effect
+        kernel = np.ones((3,3), np.uint8)
+        result = cv2.dilate(result, kernel, iterations=1)
+        
+        return result
+    
+    def create_ascii_effect(self, frame):
+        """Create ASCII art rendering"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        result = np.zeros_like(frame)
+        
+        height, width = gray.shape
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        thickness = 1
+        
+        # Increased spacing for better readability
+        char_width = 16
+        char_height = 20
+        
+        for y in range(0, height, char_height):
+            for x in range(0, width, char_width):
+                if y + char_height < height and x + char_width < width:
+                    # Get average intensity in this region
+                    region = gray[y:y+char_height, x:x+char_width]
+                    avg_intensity = np.mean(region)
+                    
+                    # Only draw characters for areas with sufficient contrast
+                    if avg_intensity > 30:  # Skip very dark areas
+                        # Map intensity to ASCII character (inverted for better contrast)
+                        char_index = int(((255 - avg_intensity) / 255) * (len(self.ascii_chars) - 1))
+                        char = self.ascii_chars[char_index]
+                        
+                        # Use a more visible color scheme
+                        if avg_intensity > 150:
+                            color = [255, 255, 255]  # White for bright areas
+                        elif avg_intensity > 100:
+                            color = [0, 255, 0]      # Green for medium areas
+                        else:
+                            color = [0, 255, 255]    # Cyan for darker areas
+                        
+                        # Draw character with better positioning
+                        cv2.putText(result, char, (x + 2, y + char_height - 4), 
+                                   font, font_scale, color, thickness)
+        
+        return result
+    
+    def update_particles(self, frame, landmarks):
+        """Update particle system"""
+        if landmarks:
+            # Add new particles near hand landmarks
+            for landmark in landmarks[::2]:  # Every other landmark to reduce particles
+                if len(self.particles) < self.max_particles:
+                    x = int(landmark.x * frame.shape[1])
+                    y = int(landmark.y * frame.shape[0])
+                    
+                    particle = {
+                        'x': x + random.randint(-20, 20),
+                        'y': y + random.randint(-20, 20),
+                        'vx': random.uniform(-2, 2),
+                        'vy': random.uniform(-2, 2),
+                        'life': 60,
+                        'color': [random.randint(100, 255), random.randint(100, 255), random.randint(100, 255)]
+                    }
+                    self.particles.append(particle)
+        
+        # Update existing particles
+        self.particles = [p for p in self.particles if p['life'] > 0]
+        
+        for particle in self.particles:
+            particle['x'] += particle['vx']
+            particle['y'] += particle['vy']
+            particle['life'] -= 1
+            particle['vy'] += 0.1  # Gravity
+    
+    def create_particles_effect(self, frame, landmarks):
+        """Create particle effect"""
+        result = np.zeros_like(frame)
+        
+        self.update_particles(frame, landmarks)
+        
+        # Draw particles
+        for particle in self.particles:
+            if 0 <= particle['x'] < frame.shape[1] and 0 <= particle['y'] < frame.shape[0]:
+                alpha = particle['life'] / 60.0
+                radius = max(1, int(alpha * 4))
+                color = [int(c * alpha) for c in particle['color']]
+                cv2.circle(result, (int(particle['x']), int(particle['y'])), 
+                          radius, color, -1)
+        
+        return result
+    
+    def process_frame(self, frame, landmarks):
+        """Process frame based on current mode"""
+        if self.current_mode == 0:  # Dots
+            return self.create_dots_effect(frame)
+        elif self.current_mode == 1:  # Lines
+            return self.create_lines_effect(frame)
+        elif self.current_mode == 2:  # ASCII
+            return self.create_ascii_effect(frame)
+        elif self.current_mode == 3:  # Particles
+            return self.create_particles_effect(frame, landmarks)
+        else:
+            return frame
+    
+    def run(self):
+        """Main application loop"""
+        cap = cv2.VideoCapture(0)
+        
+        if not cap.isOpened():
+            print("Error: Could not open webcam")
+            return
+        
+        # Set camera resolution
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        
+        print("MirrorCloneFX started!")
+        print("Hand gestures:")
+        print("✌️  Two fingers → Dots mode")
+        print("☝️  One finger → Lines mode") 
+        print("🤙 Thumb + pinky → ASCII mode")
+        print("✋ Open palm → Particles mode")
+        print("Press 'q' to quit")
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("Error: Could not read frame")
+                break
+            
+            # Flip frame horizontally for mirror effect
+            frame = cv2.flip(frame, 1)
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Process hands
+            results = self.hands.process(frame_rgb)
+            landmarks = None
+            
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    landmarks = hand_landmarks.landmark
+                    
+                    # Detect gesture and update mode
+                    gesture = self.detect_hand_gesture(landmarks)
+                    if gesture is not None:
+                        self.current_mode = gesture
+                    
+                    # Draw hand landmarks on original frame
+                    self.mp_draw.draw_landmarks(frame, hand_landmarks, 
+                                               self.mp_hands.HAND_CONNECTIONS)
+            
+            # Resize frame to half width for split view
+            frame_resized = cv2.resize(frame, (self.half_width, self.window_height))
+            
+            # Create stylized version
+            stylized = self.process_frame(frame, landmarks)
+            stylized_resized = cv2.resize(stylized, (self.half_width, self.window_height))
+            
+            # Create split screen
+            split_screen = np.hstack([frame_resized, stylized_resized])
+            
+            # Add mode indicator
+            mode_text = f"Mode: {self.modes[self.current_mode]}"
+            cv2.putText(split_screen, mode_text, (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            # Add divider line
+            cv2.line(split_screen, (self.half_width, 0), 
+                    (self.half_width, self.window_height), (255, 255, 255), 2)
+            
+            # Add labels
+            cv2.putText(split_screen, "Original", (10, 70), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(split_screen, "Clone", (self.half_width + 10, 70), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Display
+            cv2.imshow('MirrorCloneFX', split_screen)
+            
+            # Check for exit
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        
+        cap.release()
+        cv2.destroyAllWindows()
+
+def main():
+    app = MirrorCloneFX()
+    app.run()
+
+if __name__ == "__main__":
+    main()
