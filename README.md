@@ -13,6 +13,9 @@ A real-time computer vision application that creates stylized clones of yourself
   - **Particles**: Dynamic swirling particles that follow your movement with physics
 
 ## Hand Gestures
+<img width="1583" height="903" alt="image" src="https://github.com/user-attachments/assets/c4b681a7-b807-4e5e-8e99-959160887e64" />
+<img width="1578" height="932" alt="image" src="https://github.com/user-attachments/assets/0f2ac1b9-3b22-4860-b0b6-24117e935a0e" />
+
 
 | Gesture | Effect | Description |
 |---------|--------|-------------|
